@@ -1,5 +1,9 @@
 #!/bin/sh
 
+if [ "$#" -ne 1 ]; then
+    echo "Please provide precisely one parameter, the .scrobbler.log file"
+fi
+
 auth_token=""
 client=$(head "$1" | grep -Po '#CLIENT/\K.*')
 timezone=$(head "$1" | grep -Po '#TZ/\K.*')
