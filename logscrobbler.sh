@@ -4,6 +4,10 @@ if [ "$#" -ne 1 ]; then
     echo "Please provide precisely one parameter, the .scrobbler.log file"
 fi
 
+is_valid_mbid() {
+   echo "$1" | grep -P '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' > /dev/null
+}
+
 auth_token=""
 client=$(head "$1" | grep -Po '#CLIENT/\K.*')
 timezone=$(head "$1" | grep -Po '#TZ/\K.*')
@@ -12,6 +16,7 @@ grep -Pv '\s*^#' "$1" |
   # read will skip empty fields of optional parameters, so have to use multiple calls to cut instead
   while IFS= read -r line
   do
+    #ARTIST [ALBUM] TITLE [TRACKNUM] LENGTH RATING TIMESTAMP [MUSICBRAINZ_TRACKID]
     artist=$(   echo "$line" | cut -d "	" -f 1)
     album=$(    echo "$line" | cut -d "	" -f 2)
     track=$(    echo "$line" | cut -d "	" -f 3)
@@ -33,13 +38,13 @@ grep -Pv '\s*^#' "$1" |
             "listened_at": '"$timestamp"',
             "track_metadata": {
               "artist_name": "'"$artist"'",
-              "release_name": "'"$album"'",
+              '"$( [ -n "$album" ] && echo '"release_name": "'"$album"'",' )"'
               "track_name": "'"$track"'",
               "additional_info": {
                 "mediaplayer": "'"$client"'",
-                "release_mbid": "'"$mbid"'",
-                "duration": "'"$duration"'",
-                "tracknumber": "'"$tracknr"'"
+                '"$( is_valid_mbid "$mbid" && echo '"release_mbid": "'"$mbid"'",' )"'
+                '"$( [ -n "$tracknr" ] && echo '"tracknumber": "'"$tracknr"'",' )"'
+                "duration": "'"$duration"'"
               }
             }
           }
