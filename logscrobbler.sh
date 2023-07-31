@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2016
 
 if [ "$#" -ne 1 ]; then
     echo "Please provide precisely one parameter, the .scrobbler.log file"
@@ -14,8 +15,12 @@ timezone=$(head "$1" | grep -Po '#TZ/\K.*')
 tz_offset=$(date +%:z | awk '{print substr($1, 1, 1) substr($1, 2, 2)*60*60} + substr($1, 4, 2) * 60')
 
 submit() {
+  #echo "$JSON" | jq
   headerfile=$(mktemp)
-  if curl 'https://api.listenbrainz.org/1/submit-listens' --header "Authorization: Token $auth_token" --fail-with-body -D "$headerfile" --json "$JSON"
+  if curl 'https://api.listenbrainz.org/1/submit-listens' \
+    --header "Authorization: Token $auth_token" \
+    --fail-with-body -D "$headerfile" \
+    --json "$(echo "$JSON" | jq --compact-output)"
   then
     echo "Successfully submited $payload_listens listens"
     remaining=$(grep -oP "x-ratelimit-remaining: \K\d+" "$headerfile")
@@ -59,21 +64,31 @@ while IFS= read -r line
     else
       JSON="$JSON"','
     fi
-    JSON="$JSON"'
-          {
-            "listened_at": '"$timestamp"',
-            "track_metadata": {
-              "artist_name": "'"$artist"'",
-              '"$( [ -n "$album" ] && echo '"release_name": "'"$album"'",' )"'
-              "track_name": "'"$track"'",
-              "additional_info": {
-                "mediaplayer": "'"$client"'",
-                '"$( is_valid_mbid "$mbid" && echo '"release_mbid": "'"$mbid"'",' )"'
-                '"$( [ -n "$tracknr" ] && echo '"tracknumber": "'"$tracknr"'",' )"'
-                "duration": "'"$duration"'"
-              }
-            }
-          }'
+    JSON="$JSON$(jq -n \
+      '{
+         "listened_at": $timestamp,
+         "track_metadata": {
+           "artist_name": $artist,
+           '"$( [ -n "$album" ] && echo '"release_name": $album,' )"'
+           "track_name": $track,
+           "additional_info": {
+             "mediaplayer": $client,
+             '"$( is_valid_mbid "$mbid" && echo '"release_mbid": $mbid,' )"'
+             '"$( [ -n "$tracknr" ] && echo '"tracknumber": $tracknr,' )"'
+             "duration": $duration
+           }
+         }
+       }' \
+      --argjson timestamp "$timestamp"    \
+      --arg     artist    "$artist"       \
+      --arg     album     "$album"        \
+      --arg     track     "$track"        \
+      --arg     client    "$client"       \
+      --arg     mbid      "$mbid"         \
+      --argjson tracknr   "${tracknr:-0}" \
+      --argjson duration  "$duration"
+      # tracknr has a default so jq won't complain if it's missing
+    )"
     payload_listens=$((payload_listens + 1))
     if [ "$payload_listens" -eq 1000 ]; then
       JSON="$JSON"'
