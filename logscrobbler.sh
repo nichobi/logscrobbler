@@ -12,10 +12,31 @@ auth_token=""
 client=$(head "$1" | grep -Po '#CLIENT/\K.*')
 timezone=$(head "$1" | grep -Po '#TZ/\K.*')
 tz_offset=$(date +%:z | awk '{print substr($1, 1, 1) substr($1, 2, 2)*60*60} + substr($1, 4, 2) * 60')
-grep -Pv '\s*^#' "$1" |
-  # read will skip empty fields of optional parameters, so have to use multiple calls to cut instead
-  while IFS= read -r line
+
+submit() {
+  headerfile=$(mktemp)
+  if curl 'https://api.listenbrainz.org/1/submit-listens' --header "Authorization: Token $auth_token" --fail-with-body -D "$headerfile" --json "$JSON"
+  then
+    echo "Successfully submited $payload_listens listens"
+    remaining=$(grep -oP "x-ratelimit-remaining: \K\d+" "$headerfile")
+    echo remaining="$remaining"
+    if [ "$remaining" -lt 1 ]; then
+      resetin=$(grep -oP "x-ratelimit-reset-in: \K\d+" "$headerfile")
+      echo sleeping "$resetin"
+      sleep "$resetin"
+    fi
+  else
+    echo "Failed to submit $payload_listens listens"
+    echo "$JSON" >> "$1".failed
+  fi
+  rm "$headerfile"
+  payload_listens=0
+}
+
+payload_listens=0
+while IFS= read -r line
   do
+    (echo "$line" | grep -P '^\s*#') && continue # Ignore comments
     #ARTIST [ALBUM] TITLE [TRACKNUM] LENGTH RATING TIMESTAMP [MUSICBRAINZ_TRACKID]
     artist=$(   echo "$line" | cut -d "	" -f 1)
     album=$(    echo "$line" | cut -d "	" -f 2)
@@ -26,14 +47,19 @@ grep -Pv '\s*^#' "$1" |
     timestamp=$(echo "$line" | cut -d "	" -f 7)
     mbid=$(     echo "$line" | cut -d "	" -f 8)
 
+    [ "$rating" != "L" ] && continue # Ignore skipped tracks
+
     [ "$timezone" = 'UNKNOWN' ] && timestamp=$((timestamp - tz_offset))
-    if [ "$rating" != "L" ]; then
-      :
-    else
+    if [ "$payload_listens" -lt 1 ]; then
       JSON='
       {
-        "listen_type": "single",
-        "payload": [
+        "listen_type": "import",
+        "payload": ['
+        payload_listens=0
+    else
+      JSON="$JSON"','
+    fi
+    JSON="$JSON"'
           {
             "listened_at": '"$timestamp"',
             "track_metadata": {
@@ -47,26 +73,19 @@ grep -Pv '\s*^#' "$1" |
                 "duration": "'"$duration"'"
               }
             }
-          }
+          }'
+    payload_listens=$((payload_listens + 1))
+    if [ "$payload_listens" -eq 1000 ]; then
+      JSON="$JSON"'
         ]
       }'
-      #echo "$JSON"
-      headerfile=$(mktemp)
-      if curl 'https://api.listenbrainz.org/1/submit-listens' --header "Authorization: Token $auth_token" --fail-with-body -D "$headerfile" --json "$JSON"
-      then
-        remaining=$(grep -oP "x-ratelimit-remaining: \K\d+" "$headerfile")
-        echo remaining="$remaining"
-        if [ "$remaining" -lt 1 ]; then
-          resetin=$(grep -oP "x-ratelimit-reset-in: \K\d+" "$headerfile")
-          echo sleeping "$resetin"
-          sleep "$resetin"
-        fi
-      else
-        echo Scrobble failed: "$artist - $album - $track"
-        echo "$artist	$album	$track	$tracknr	$duration	$rating	$timestamp	$mbid" >> "$1".failed
-      fi
-      rm "$headerfile"
-
+      submit "$@"
     fi
+  done <"$1"
+if [ "$payload_listens" -ge 1 ]; then
+      JSON="$JSON"'
+        ]
+      }'
+  submit "$@"
+fi
 
-  done
